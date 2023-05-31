@@ -8,12 +8,11 @@ import (
 	"time"
 )
 
-const longTick = time.Hour * 24 * 365
-
 type Delay interface {
+	// GetDelay Return delay time
 	GetDelay() time.Duration
-	IsCycle() bool
-	Exec()
+	// Cycle Is it a periodic operation
+	Cycle() bool
 }
 
 type element struct {
@@ -27,18 +26,14 @@ type h []*element
 type Option func(d *DelayQueue)
 
 type DelayQueue struct {
-	// minimum error range
-	offset time.Duration
-	ticker *time.Timer
 	heap   h
 	ctx    context.Context
 	cancel context.CancelFunc
 	// expireChannel
-	out        chan Delay
-	in         chan struct{}
-	lock       sync.RWMutex
-	state      uint32
-	nextExpire time.Duration
+	out   chan Delay
+	in    chan struct{}
+	lock  sync.RWMutex
+	state uint32
 }
 
 func NewDelayQueue(ops ...Option) *DelayQueue {
@@ -47,14 +42,11 @@ func NewDelayQueue(ops ...Option) *DelayQueue {
 	inChannel := make(chan struct{})
 	outChannel := make(chan Delay)
 	d := &DelayQueue{
-		offset:     time.Millisecond * 10,
-		ticker:     time.NewTimer(longTick),
-		heap:       make(h, 0, 16),
-		ctx:        ctx,
-		cancel:     cancelFunc,
-		out:        outChannel,
-		in:         inChannel,
-		nextExpire: longTick,
+		heap:   make(h, 0, 16),
+		ctx:    ctx,
+		cancel: cancelFunc,
+		out:    outChannel,
+		in:     inChannel,
 	}
 
 	for _, op := range ops {
@@ -88,7 +80,6 @@ func (d *DelayQueue) run() {
 		d.lock.Unlock()
 
 		if delay == 0 {
-			//delay = longTick
 			select {
 			case <-d.in:
 				continue
@@ -116,14 +107,10 @@ exit:
 	close(d.out)
 }
 
-func (d *DelayQueue) Poll() <-chan Delay {
-	return d.out
-}
-
-func (d *DelayQueue) Push(e Delay) {
+func (d *DelayQueue) Offer(e Delay) {
 	de := e.GetDelay()
 	if e.GetDelay() <= 0 {
-		de = d.offset
+		de = time.Millisecond * 1
 	}
 	et := &element{
 		e:         e,
@@ -149,6 +136,11 @@ func (d *DelayQueue) Push(e Delay) {
 	heap.Push(&d.heap, et)
 }
 
+// Poll Return Expiration Element Channel
+func (d *DelayQueue) Poll() <-chan Delay {
+	return d.out
+}
+
 func (d *DelayQueue) Pop() (any, bool) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
@@ -160,7 +152,7 @@ func (d *DelayQueue) Pop() (any, bool) {
 }
 
 func (d *DelayQueue) Len() int {
-	d.lock.RLocker()
+	d.lock.RLock()
 	defer d.lock.RUnlock()
 	return len(d.heap)
 }
@@ -199,7 +191,7 @@ func (m *h) peekAndShift() (*element, time.Duration) {
 	if e.absExpire > now {
 		return nil, e.absExpire - now
 	}
-	if e.e.IsCycle() {
+	if e.e.Cycle() {
 		e.absExpire += e.e.GetDelay()
 		heap.Fix(m, 0)
 	} else {
@@ -258,12 +250,6 @@ func (m *h) Pop() any {
 	item.index = -1
 	*m = (*m)[0 : n-1]
 	return item
-}
-
-func WithOffset(offset time.Duration) Option {
-	return func(d *DelayQueue) {
-		d.offset = offset
-	}
 }
 
 func WithTaskChannel(num int) Option {

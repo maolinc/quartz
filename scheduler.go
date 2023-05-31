@@ -3,20 +3,26 @@ package quartz
 import "time"
 
 type Result interface {
+	// Stop Immediately stop running, the task will be deleted the next time it expires, lazy deletion.
 	Stop()
+	// Pause the task until resuming operation using Continue()
+	Pause()
+	// Continue Resuming paused tasks
+	Continue()
 }
 
-// Scheduler 定时器接口
+// Scheduler interface
 type Scheduler interface {
-	// AfterFunc 一次性定时器
+	// AfterFunc Single task, only executed once
 	AfterFunc(expire time.Duration, callback ExecuteFunc) Result
 
-	// ScheduleFunc 周期性定时器
+	// ScheduleFunc Recurring tasks
 	ScheduleFunc(expire time.Duration, callback ExecuteFunc) Result
 
-	// Run 运行
 	Run()
 
-	// Stop 停止所有定时器
+	// Stop Stopping scheduling will stop all tasks
 	Stop()
+
+	Size() int64
 }

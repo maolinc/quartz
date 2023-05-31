@@ -8,14 +8,12 @@ import (
 	"unsafe"
 )
 
-type T interface {
-	*TimingWheel | *task
-}
+var _ Scheduler = (*TimingWheel)(nil)
 
 type TimingWheel struct {
 	state int32 //ensure heap concurrency security
 
-	tickMs      time.Duration
+	tick        time.Duration
 	wheelSize   int64
 	interval    time.Duration
 	buckets     []*nodeList
@@ -27,37 +25,29 @@ type TimingWheel struct {
 	queue         *DelayQueue // min heap
 	currentTimeMs time.Duration
 
-	level      int
-	taskCount  int64
-	execChanel chan *task
-
-	pool *TaskPool
+	level int
 }
 
-func NewTimingWheel(tick time.Duration, wheelSize int64) *TimingWheel {
+func NewTimingWheel(tick time.Duration, wheelSize int64) Scheduler {
 	return NewTimingWheelWithContext(context.Background(), tick, wheelSize)
 }
 
-func NewTimingWheelWithContext(ctx context.Context, tick time.Duration, wheelSize int64) *TimingWheel {
-	var startMs = nowNano()
+func NewTimingWheelWithContext(ctx context.Context, tick time.Duration, wheelSize int64) Scheduler {
+	var start = nowNano()
 	delayHeap := NewDelayQueue()
-	tw := newTimingWheel(tick, wheelSize, startMs, delayHeap)
+	tw := newTimingWheel(tick, wheelSize, start, delayHeap)
 	tw.ctx, tw.cancelFunc = context.WithCancel(ctx)
-	tw.execChanel = make(chan *task)
-	tw.pool = NewTaskPool()
-
-	go tw.run()
 
 	return tw
 }
 
-func newTimingWheel(tickMs time.Duration, wheelSize int64, startMs time.Duration, queue *DelayQueue) *TimingWheel {
+func newTimingWheel(tick time.Duration, wheelSize int64, startMs time.Duration, queue *DelayQueue) *TimingWheel {
 	t := &TimingWheel{
-		tickMs:        tickMs,
+		tick:          tick,
 		wheelSize:     wheelSize,
-		interval:      tickMs * time.Duration(wheelSize),
+		interval:      tick * time.Duration(wheelSize),
 		buckets:       initNodeList(int(wheelSize)),
-		pointerTime:   startMs - (startMs % tickMs),
+		pointerTime:   startMs - (startMs % tick),
 		highWheel:     nil,
 		currentTimeMs: startMs,
 		ctx:           nil,
@@ -67,33 +57,28 @@ func newTimingWheel(tickMs time.Duration, wheelSize int64, startMs time.Duration
 	return t
 }
 
-func (t *TimingWheel) run() {
-	for {
-		select {
-		case e, ok := <-t.queue.Poll():
-			if !ok {
+func (t *TimingWheel) Run() {
+	go func() {
+		for {
+			select {
+			case e := <-t.queue.Poll():
+				bucket := e.(*nodeList)
+				t.advanceWheel(bucket.absExpire)
+				bucket.removeAll(func(task *task) {
+					// task moved form high to low
+					t.addTimer(task)
+				})
+			case <-t.ctx.Done():
+				t.queue.Close()
 				return
 			}
-			bucket := e.(*nodeList)
-			t.advanceWheel(bucket.absExpire)
-			//st := time.Now()
-			bucket.removeAll(func(ex time.Duration, task *task) {
-				// task moved form high to low
-				t.addTimer(task)
-			})
-			//ed := time.Now()
-			//fmt.Println("dddd:", ed.UnixMilli()-st.UnixMilli())
-		case <-t.ctx.Done():
-			t.queue.Close()
-			return
 		}
-	}
+	}()
 }
 
 func (t *TimingWheel) AfterFunc(expire time.Duration, executeFunc ExecuteFunc) Result {
 	milli := nowNano()
 	nTask := newTask(t.ctx, expire, milli+expire, executeFunc, withTaskMaxExec(1))
-	atomic.AddInt64(&t.taskCount, 1)
 	t.addTimer(nTask)
 	return nTask
 }
@@ -101,7 +86,6 @@ func (t *TimingWheel) AfterFunc(expire time.Duration, executeFunc ExecuteFunc) R
 func (t *TimingWheel) ScheduleFunc(expire time.Duration, executeFunc ExecuteFunc) Result {
 	milli := nowNano()
 	nTask := newTask(t.ctx, expire, milli+expire, executeFunc, withTaskCycleExec())
-	atomic.AddInt64(&t.taskCount, 1)
 	t.addTimer(nTask)
 	//t.queue.Push(nTask)
 	return nTask
@@ -124,19 +108,19 @@ func (t *TimingWheel) add(task *task) bool {
 	expire := task.absExpire
 	if !task.isExec() {
 		return false
-	} else if expire < t.pointerTime+t.tickMs {
+	} else if expire < t.pointerTime+t.tick {
 		//t.execTask(task)
 		return false
 	} else if expire < t.pointerTime+t.interval {
 		// add bucket
-		idx := expire / t.tickMs
+		idx := expire / t.tick
 		index := int64(idx) % t.wheelSize
 		bucket := t.buckets[index]
 		bucket.add(task)
-		roundExpire := idx * t.tickMs
+		roundExpire := idx * t.tick
 		if bucket.getAbsExpire() > roundExpire {
 			if bucket.setAbsExpire(int64(roundExpire)) {
-				t.queue.Push(bucket)
+				t.queue.Offer(bucket)
 			}
 		}
 		return true
@@ -148,21 +132,28 @@ func (t *TimingWheel) add(task *task) bool {
 
 func (t *TimingWheel) addTimer(task *task) {
 	if !t.add(task) {
-		if task.isExec() {
-			task.execCount++
-			t.pool.Submit(func(ctx context.Context) {
-				task.execFunc(task.ctx)
-				task.absExpire = task.expire + nowNano()
-				t.addTimer(task)
-			})
+		if task.isCanceled() {
+			return
 		}
+		if !task.isExecCount() {
+			return
+		}
+
+		go func() {
+			if !task.isPause() {
+				task.execCount++
+				task.execFunc(task.ctx)
+			}
+			task.absExpire = task.expire + nowNano()
+			t.addTimer(task)
+		}()
 	}
 }
 
-// 驱动pointerTime前进
+// Drive pointerTime forward
 func (t *TimingWheel) advanceWheel(timeMs time.Duration) {
-	if timeMs >= t.pointerTime+t.tickMs {
-		t.pointerTime = timeMs - (timeMs % t.tickMs)
+	if timeMs >= t.pointerTime+t.tick {
+		t.pointerTime = timeMs - (timeMs % t.tick)
 		if t.highWheel != nil {
 			(*TimingWheel)(t.highWheel).advanceWheel(t.pointerTime)
 		}
@@ -170,7 +161,13 @@ func (t *TimingWheel) advanceWheel(timeMs time.Duration) {
 }
 
 func (t *TimingWheel) Size() int64 {
-	return t.taskCount
+	var total int64 = 0
+	for tw := t; tw != nil; tw = (*TimingWheel)(tw.highWheel) {
+		for i := 0; i < len(tw.buckets); i++ {
+			total += tw.buckets[i].length()
+		}
+	}
+	return total
 }
 
 func (t *TimingWheel) getWheelDeep() int64 {
@@ -186,8 +183,8 @@ func (t *TimingWheel) print() {
 	i := 1
 	for tw := t; tw != nil; tw = (*TimingWheel)(tw.highWheel) {
 		fmt.Println("\n--------------------")
-		fmt.Printf("第%d层: tickMs=%d, wheelSize=%d, interval=%d, pointerTime=%d",
-			i, tw.tickMs, tw.wheelSize, tw.interval, tw.pointerTime)
+		fmt.Printf("第%d层: tick=%d, wheelSize=%d, interval=%d, pointerTime=%d",
+			i, tw.tick, tw.wheelSize, tw.interval, tw.pointerTime)
 		for j := range tw.buckets {
 			list := tw.buckets[j]
 			if list.length() == 0 {
