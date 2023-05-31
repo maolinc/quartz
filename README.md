@@ -43,3 +43,9 @@ result.Stop()
 // 停止所有任务
 scheduler.Stop()
 ```
+
+## 架构
+![无标题](https://github.com/maolinc/quartz/assets/82015883/bb78c4b4-698a-4834-b000-7bb79d109adb)
+
+使用延时队列解决空转性能消耗
+所有任务都在链表中，任务的添加和删除O(1)
