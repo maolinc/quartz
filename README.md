@@ -1,7 +1,7 @@
-## quartz
+### 1.quartz
 使用时间轮实现的调度框架; 零依赖性
 
-## 使用
+### 2.使用
 ```shell
 go get -u github.com/maolinc/quartz
 ```
@@ -44,7 +44,7 @@ result.Stop()
 scheduler.Stop()
 ```
 
-## 架构
+### 3.架构
 ![无标题](https://github.com/maolinc/quartz/assets/82015883/bb78c4b4-698a-4834-b000-7bb79d109adb)
 
 使用延时队列解决空转性能消耗
