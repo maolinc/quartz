@@ -185,9 +185,10 @@ func (t *task) isCanceled() bool {
 }
 
 func (t *task) canceled() {
-	//for t.bucket != nil {
-	//	t.bucket.remove(t)
-	//}
+	//Try to remove task
+	for t.bucket != nil {
+		t.bucket.remove(t)
+	}
 	t.setState(t.getState() | canceled)
 }
 

@@ -11,7 +11,7 @@ func TestScheduler(t *testing.T) {
 	scheduler := NewTimingWheel(time.Millisecond*10, 20)
 	scheduler.Run()
 
-	for i := 1; i < 1000000; i++ {
+	for i := 1; i < 5000000; i++ {
 		scheduler.ScheduleFunc(time.Millisecond*10*time.Duration(i), func(ctx context.Context) {
 
 		})
@@ -51,26 +51,7 @@ func TestScheduler2(t *testing.T) {
 		st = ed
 	})
 
-	select {}
-}
+	for {
 
-func TestName(t *testing.T) {
-	ch := make(chan int64)
-	go func() {
-		for {
-			select {
-			case _ = <-ch:
-
-			}
-		}
-	}()
-
-	for i := 0; i < 10; i++ {
-		go func() {
-			for j := 0; j < 1000000; j++ {
-				ch <- int64(j)
-			}
-		}()
 	}
-	time.Sleep(time.Millisecond * 10)
 }

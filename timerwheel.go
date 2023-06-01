@@ -11,8 +11,6 @@ import (
 var _ Scheduler = (*TimingWheel)(nil)
 
 type TimingWheel struct {
-	state int32 //ensure heap concurrency security
-
 	tick        time.Duration
 	wheelSize   int64
 	interval    time.Duration
@@ -87,7 +85,6 @@ func (t *TimingWheel) ScheduleFunc(expire time.Duration, executeFunc ExecuteFunc
 	milli := nowNano()
 	nTask := newTask(t.ctx, expire, milli+expire, executeFunc, withTaskCycleExec())
 	t.addTimer(nTask)
-	//t.queue.Push(nTask)
 	return nTask
 }
 
@@ -109,7 +106,6 @@ func (t *TimingWheel) add(task *task) bool {
 	if !task.isExec() {
 		return false
 	} else if expire < t.pointerTime+t.tick {
-		//t.execTask(task)
 		return false
 	} else if expire < t.pointerTime+t.interval {
 		// add bucket
