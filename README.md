@@ -33,7 +33,7 @@ result := scheduler.ScheduleFunc(time.Second, func(ctx context.Context) {
     // todo
 })
 // 任务2
-result := scheduler.ScheduleFunc(time.Second, func(ctx context.Context) {
+result2 := scheduler.ScheduleFunc(time.Second, func(ctx context.Context) {
     // todo
 })
 // 暂停
